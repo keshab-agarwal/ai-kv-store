@@ -144,7 +144,8 @@ func RunWorkload(cluster interfaces.Cluster, cfg WorkloadConfig) ([]recorder.His
 				if isRead {
 					rs.Get(ctx, key) //nolint:errcheck
 				} else {
-					val := generateValue(cfg.ValueSize, rng)
+					size := nextValueSize(cfg, rng)
+					val := generateValue(size, rng)
 					putErr := rs.Put(ctx, key, val)
 					returnVal(val)
 					if putErr == nil {
@@ -199,17 +200,38 @@ func newDistribution(cfg WorkloadConfig, seed int64) Distribution {
 	}
 }
 
+// nextValueSize returns the size in bytes for the next value (avg ValueSize, cap ValueSizeMax).
+func nextValueSize(cfg WorkloadConfig, rng *rand.Rand) int {
+	if cfg.ValueSizeMax <= 0 {
+		return cfg.ValueSize
+	}
+	// Exponential with mean ValueSize, capped at ValueSizeMax.
+	size := 1 + int(rng.ExpFloat64()*float64(cfg.ValueSize))
+	if size > cfg.ValueSizeMax {
+		size = cfg.ValueSizeMax
+	}
+	if size < interfaces.MinValueSize {
+		size = interfaces.MinValueSize
+	}
+	return size
+}
+
 // generateValue creates a random value of the given size using the pool.
 func generateValue(size int, rng *rand.Rand) interfaces.Value {
 	bufPtr := valuePool.Get().(*[]byte)
+	if size > cap(*bufPtr) {
+		buf := make([]byte, size)
+		rng.Read(buf)
+		return interfaces.Value(buf)
+	}
 	buf := (*bufPtr)[:size]
 	rng.Read(buf)
 	return interfaces.Value(buf)
 }
 
-// returnVal returns a value buffer to the pool.
+// returnVal returns a value buffer to the pool when it was from the pool.
 func returnVal(v interfaces.Value) {
-	if cap(v) == interfaces.MaxValueSize {
+	if cap(v) >= interfaces.MaxValueSize {
 		buf := ([]byte)(v[:interfaces.MaxValueSize])
 		valuePool.Put(&buf)
 	}

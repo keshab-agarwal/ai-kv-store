@@ -13,29 +13,26 @@ import (
 
 // BenchmarkConfig parameterises a standalone performance run.
 type BenchmarkConfig struct {
-	// NumClients is the number of concurrent client goroutines.
 	NumClients int
-	// NumKeys is the size of the key space.
-	NumKeys int
-	// ReadRatio is the fraction of operations that are Gets (0.0–1.0).
-	ReadRatio float64
-	// ValueSize is the fixed value size in bytes.
-	ValueSize int
-	// Duration is how long to run.
-	Duration time.Duration
-	// RampUp is the warm-up period (not measured).
-	RampUp time.Duration
+	NumKeys    int
+	ReadRatio  float64
+	// ValueSize is the average value size in bytes; ValueSizeMax caps variable size.
+	ValueSize    int
+	ValueSizeMax int
+	Duration     time.Duration
+	RampUp       time.Duration
 }
 
 // DefaultBenchmarkConfig returns a sensible default for a 60-second benchmark.
 func DefaultBenchmarkConfig() BenchmarkConfig {
 	return BenchmarkConfig{
-		NumClients: 16,
-		NumKeys:    10000,
-		ReadRatio:  0.9,
-		ValueSize:  interfaces.MinValueSize, // 1 MB
-		Duration:   60 * time.Second,
-		RampUp:     5 * time.Second,
+		NumClients:   16,
+		NumKeys:      10000,
+		ReadRatio:    0.9,
+		ValueSize:    1024,
+		ValueSizeMax: interfaces.MaxValueSize,
+		Duration:     60 * time.Second,
+		RampUp:       5 * time.Second,
 	}
 }
 
@@ -49,6 +46,7 @@ func Run(cluster interfaces.Cluster, cfg BenchmarkConfig) (workload.PerfResult, 
 		KeyDistribution: "zipfian",
 		ZipfianConstant: 0.99,
 		ValueSize:       cfg.ValueSize,
+		ValueSizeMax:    cfg.ValueSizeMax,
 		Duration:        cfg.Duration,
 		RampUp:          cfg.RampUp,
 	}

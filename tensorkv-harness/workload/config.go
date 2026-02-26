@@ -29,9 +29,12 @@ type WorkloadConfig struct {
 	// Typical value: 0.99 (high skew). Only used when KeyDistribution == "zipfian".
 	ZipfianConstant float64
 
-	// ValueSize is the fixed size of generated values in bytes.
-	// Must be within [interfaces.MinValueSize, interfaces.MaxValueSize].
+	// ValueSize is the fixed size of generated values in bytes when ValueSizeMax is 0.
+	// When ValueSizeMax > 0, value sizes are variable with mean ValueSize and cap ValueSizeMax.
 	ValueSize int
+
+	// ValueSizeMax is the maximum value size. When > 0, sizes are drawn with mean ValueSize and cap ValueSizeMax.
+	ValueSizeMax int
 
 	// Duration is the total wall-clock time to run the workload.
 	Duration time.Duration

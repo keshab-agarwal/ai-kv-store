@@ -3,8 +3,9 @@
 // Usage:
 //
 //	harness --mock                          # evaluate against the in-memory mock
-//	harness --mock --workload-only          # performance benchmark only (no invariant checking)
-//	harness --mock --nodes 5               # override node count
+//	harness --kv-store                      # evaluate the kv-store implementation (build bin/node first)
+//	harness --kv-store --workload-only      # performance benchmark only
+//	harness --nodes 3                       # override node count (default 3)
 //
 // Exit codes:
 //
@@ -22,29 +23,36 @@ import (
 	"github.com/tensorkv/harness/evaluator"
 	"github.com/tensorkv/harness/interfaces"
 	"github.com/tensorkv/harness/internal/mock"
+	"github.com/tensorkv/harness/skeleton"
 	"github.com/tensorkv/harness/workload"
 )
 
 func main() {
 	useMock := flag.Bool("mock", false, "Use the in-memory mock cluster for testing the harness itself.")
+	useKVStore := flag.Bool("kv-store", false, "Use the kv-store implementation (requires bin/node).")
+	short := flag.Bool("short", false, "Short run: 5s per phase, 10s perf (~30–40s total).")
 	workloadOnly := flag.Bool("workload-only", false,
 		"Skip invariant checking and run only the performance benchmark. Useful for quick iteration.")
 	nodes := flag.Int("nodes", 3, "Number of cluster nodes to start.")
 	flag.Parse()
 
-	if !*useMock {
-		fmt.Fprintln(os.Stderr, "error: only --mock is supported in this build; provide a --implementation flag with a real cluster")
+	var cluster interfaces.Cluster
+	switch {
+	case *useKVStore:
+		cluster = skeleton.NewCluster()
+	case *useMock:
+		cluster = mock.NewCluster()
+	default:
+		fmt.Fprintln(os.Stderr, "error: specify --mock or --kv-store")
 		os.Exit(1)
 	}
-
-	cluster := mock.NewCluster()
 
 	if *workloadOnly {
 		runWorkloadOnly(cluster, *nodes)
 		return
 	}
 
-	score, report := evaluator.Evaluate(cluster, *nodes)
+	score, report := evaluator.EvaluateWithConfig(cluster, *nodes, evaluator.Config{Short: *short})
 	fmt.Print(report)
 
 	if score == 0.0 {
@@ -70,7 +78,8 @@ func runWorkloadOnly(cluster interfaces.Cluster, nodeCount int) {
 		ReadRatio:       0.9,
 		KeyDistribution: "zipfian",
 		ZipfianConstant: 0.99,
-		ValueSize:       interfaces.MinValueSize,
+		ValueSize:       1024,
+		ValueSizeMax:    interfaces.MaxValueSize,
 		Duration:        30 * time.Second,
 		RampUp:          3 * time.Second,
 	}

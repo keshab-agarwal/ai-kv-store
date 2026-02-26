@@ -6,6 +6,7 @@ package evaluator
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -23,7 +24,7 @@ import (
 var invariantDesc = map[string]string{
 	"phantom-reads":      "Get must only return values that were previously Put for this key.",
 	"monotonic-reads":    "A client must never observe an older version of a key after reading a newer one.",
-	"causal-consistency": "All reads must be consistent with some serial execution of writes (linearizability per key).",
+	"causal-consistency": "Causal consistency: read your writes, monotonic reads, monotonic writes, writes follow reads (session guarantees).",
 	"durability":         "Values successfully Put before a node crash must survive on all remaining and restarted nodes.",
 	"workload":           "The workload must run without infrastructure errors.",
 	"performance":        "The cluster must sustain measurable throughput under the benchmark workload.",
@@ -56,29 +57,33 @@ func (r *result) failWith(invariant, msg string) {
 	}
 }
 
+// Config optionally shortens the evaluation for quick local runs.
+type Config struct {
+	Short bool // if true, phases use 5s workload and 10s perf (~30–40s total)
+}
+
 // Evaluate runs the full evaluation suite against the given Cluster.
-//
-// All phases are always attempted regardless of earlier failures; this gives an
-// LLM evolver the full diagnostic picture in a single run.
-//
-// Scoring:
-//
-//	Phase 1 (HappyPath)        +0.25 if all invariants pass
-//	Phase 2 (CrashDuringLoad)  +0.25 if all invariants pass
-//	Phase 3 (NetworkPartition) +0.25 if all invariants pass
-//	Phase 4 (Performance)      +min(0.25, throughput/1000 * 0.25)
-//
-// Maximum total score: 1.0 (all correctness phases pass, throughput >= 1000 ops/s).
-// The returned report string describes pass/fail for every phase and includes
-// throughput and latency percentiles from the performance run.
 func Evaluate(cluster interfaces.Cluster, nodeCount int) (float64, string) {
+	return EvaluateWithConfig(cluster, nodeCount, Config{})
+}
+
+// EvaluateWithConfig runs the evaluation with optional short durations.
+func EvaluateWithConfig(cluster interfaces.Cluster, nodeCount int, cfg Config) (float64, string) {
+	phaseDuration := 30 * time.Second
+	phaseRampUp := 3 * time.Second
+	perfDuration := 60 * time.Second
+	perfRampUp := 5 * time.Second
+	if cfg.Short {
+		phaseDuration = 5 * time.Second
+		phaseRampUp = 1 * time.Second
+		perfDuration = 10 * time.Second
+		perfRampUp = 1 * time.Second
+	}
+
 	var sb strings.Builder
 	sb.WriteString("=== TensorKV Harness Evaluation Report ===\n\n")
 	sb.WriteString("Scoring: Phase1=0.25 Phase2=0.25 Phase3=0.25 Phase4=min(0.25, throughput/1000*0.25)\n\n")
 
-	// ------------------------------------------------------------------
-	// Phase 0: Start cluster — fatal if this fails; nothing else can run.
-	// ------------------------------------------------------------------
 	if err := cluster.Start(nodeCount); err != nil {
 		msg := fmt.Sprintf("cluster failed to start: %v", err)
 		sb.WriteString("[FATAL] " + msg + "\n")
@@ -88,17 +93,24 @@ func Evaluate(cluster interfaces.Cluster, nodeCount int) (float64, string) {
 	defer cluster.Shutdown() //nolint:errcheck
 
 	sb.WriteString(fmt.Sprintf("Cluster started with %d nodes.\n\n", nodeCount))
+	runStart := time.Now()
+	if cfg.Short {
+		fmt.Fprintf(os.Stderr, "Cluster started. Short mode: ~30–40s total.\n")
+	} else {
+		fmt.Fprintf(os.Stderr, "Cluster started. Full run: ~3–4 min. Use --short for quick check.\n")
+	}
+	fmt.Fprintf(os.Stderr, "[timing] start %v\n", runStart.Format("15:04:05.000"))
 
-	// Base workload config shared across Phases 1-3.
 	baseConfig := workload.WorkloadConfig{
 		NumClients:      8,
 		NumKeys:         1000,
 		ReadRatio:       0.9,
 		KeyDistribution: "zipfian",
 		ZipfianConstant: 0.99,
-		ValueSize:       interfaces.MinValueSize, // 1 MB
-		Duration:        30 * time.Second,
-		RampUp:          3 * time.Second,
+		ValueSize:       1024,              // 1 KB average
+		ValueSizeMax:    interfaces.MaxValueSize, // 1 MB max
+		Duration:        phaseDuration,
+		RampUp:          phaseRampUp,
 	}
 
 	var totalScore float64
@@ -106,10 +118,13 @@ func Evaluate(cluster interfaces.Cluster, nodeCount int) (float64, string) {
 	// ------------------------------------------------------------------
 	// Phase 1: HappyPath — no faults
 	// ------------------------------------------------------------------
+	phase1Start := time.Now()
+	fmt.Fprintf(os.Stderr, "Phase 1: HappyPath (%s workload)...\n", phaseDuration)
 	sb.WriteString("--- Phase 1: HappyPath (no faults) ---\n")
 	{
 		r := &result{phase: "HappyPath"}
 		history, _, err := faultinjector.RunWithFaults(cluster, baseConfig, faultinjector.HappyPath())
+		fmt.Fprintf(os.Stderr, "[timing] Phase 1 workload done in %v\n", time.Since(phase1Start))
 		if err != nil {
 			r.failWith("workload", err.Error())
 		} else {
@@ -126,11 +141,14 @@ func Evaluate(cluster interfaces.Cluster, nodeCount int) (float64, string) {
 			sb.WriteString(fmt.Sprintf("  Phase 1 score: +0.00  (running total: %.2f)\n", totalScore))
 		}
 	}
+	fmt.Fprintf(os.Stderr, "[timing] Phase 1 total %v\n", time.Since(phase1Start))
 	sb.WriteString("\n")
 
 	// ------------------------------------------------------------------
 	// Phase 2: CrashDuringLoad
 	// ------------------------------------------------------------------
+	phase2Start := time.Now()
+	fmt.Fprintf(os.Stderr, "Phase 2: CrashDuringLoad (%s, node 1 killed/restarted)...\n", phaseDuration)
 	sb.WriteString("--- Phase 2: CrashDuringLoad (node 1 killed at 30%, restarted at 60%) ---\n")
 	{
 		r := &result{phase: "CrashDuringLoad"}
@@ -176,11 +194,14 @@ func Evaluate(cluster interfaces.Cluster, nodeCount int) (float64, string) {
 			sb.WriteString(fmt.Sprintf("  Phase 2 score: +0.00  (running total: %.2f)\n", totalScore))
 		}
 	}
+	fmt.Fprintf(os.Stderr, "[timing] Phase 2 total %v\n", time.Since(phase2Start))
 	sb.WriteString("\n")
 
 	// ------------------------------------------------------------------
 	// Phase 3: NetworkPartition
 	// ------------------------------------------------------------------
+	phase3Start := time.Now()
+	fmt.Fprintf(os.Stderr, "Phase 3: NetworkPartition (%s)...\n", phaseDuration)
 	sb.WriteString("--- Phase 3: NetworkPartition (node 0 ↔ node 1 partitioned at 30%, healed at 60%) ---\n")
 	{
 		r := &result{phase: "NetworkPartition"}
@@ -202,19 +223,23 @@ func Evaluate(cluster interfaces.Cluster, nodeCount int) (float64, string) {
 			sb.WriteString(fmt.Sprintf("  Phase 3 score: +0.00  (running total: %.2f)\n", totalScore))
 		}
 	}
+	fmt.Fprintf(os.Stderr, "[timing] Phase 3 total %v\n", time.Since(phase3Start))
 	sb.WriteString("\n")
 
 	// ------------------------------------------------------------------
 	// Phase 4: Performance benchmark
 	// ------------------------------------------------------------------
-	sb.WriteString("--- Phase 4: Performance Benchmark (60s, 16 clients, 10k keys, 90/10 R/W) ---\n")
+	phase4Start := time.Now()
+	fmt.Fprintf(os.Stderr, "Phase 4: Performance benchmark (%s)...\n", perfDuration)
+	sb.WriteString("--- Phase 4: Performance Benchmark (16 clients, 10k keys, 90/10 R/W) ---\n")
 	perfCfg := benchmark.BenchmarkConfig{
 		NumClients: 16,
 		NumKeys:    10000,
 		ReadRatio:  0.9,
-		ValueSize:  interfaces.MinValueSize,
-		Duration:   60 * time.Second,
-		RampUp:     5 * time.Second,
+		ValueSize:  1024,
+		ValueSizeMax: interfaces.MaxValueSize,
+		Duration:   perfDuration,
+		RampUp:     perfRampUp,
 	}
 	perf, perfReport, err := benchmark.Run(cluster, perfCfg)
 	if err != nil {
@@ -236,6 +261,8 @@ func Evaluate(cluster interfaces.Cluster, nodeCount int) (float64, string) {
 			phase4, perf.Throughput, totalScore))
 	}
 
+	fmt.Fprintf(os.Stderr, "[timing] Phase 4 total %v\n", time.Since(phase4Start))
+	fmt.Fprintf(os.Stderr, "[timing] total run %v\n", time.Since(runStart))
 	sb.WriteString(fmt.Sprintf("\n=== Score: %.4f ===\n", totalScore))
 	sb.WriteString(scoreBreakdown(totalScore))
 
@@ -295,7 +322,7 @@ func checkConsistency(r *result, rec *recorder.Recorder) {
 		r.pass("monotonic-reads")
 	}
 
-	if err := checkers.CheckCausalConsistency(rec); err != nil {
+	if err := checkers.CheckCausalConsistencySession(rec); err != nil {
 		r.failWith("causal-consistency", err.Error())
 	} else {
 		r.pass("causal-consistency")

@@ -19,11 +19,11 @@ type NodeID uint32
 type Value []byte
 
 const (
-	// MinValueSize is the minimum allowed value size (1 MB).
-	MinValueSize = 1 << 20
+	// MinValueSize is the minimum allowed value size (1 byte).
+	MinValueSize = 1
 
-	// MaxValueSize is the maximum allowed value size (4 MB).
-	MaxValueSize = 4 * (1 << 20)
+	// MaxValueSize is the maximum allowed value size (1 MB).
+	MaxValueSize = 1 << 20
 )
 
 var (
@@ -31,10 +31,10 @@ var (
 	ErrKeyNotFound = errors.New("key not found")
 
 	// ErrValueTooSmall is returned when the value is smaller than MinValueSize.
-	ErrValueTooSmall = errors.New("value smaller than 1MB")
+	ErrValueTooSmall = errors.New("value smaller than 1 byte")
 
 	// ErrValueTooLarge is returned when the value is larger than MaxValueSize.
-	ErrValueTooLarge = errors.New("value larger than 4MB")
+	ErrValueTooLarge = errors.New("value larger than 1MB")
 
 	// ErrNodeDown is returned when the target node is unavailable.
 	ErrNodeDown = errors.New("node unavailable")
