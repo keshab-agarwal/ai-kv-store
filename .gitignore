@@ -5,3 +5,6 @@ test-faults/
 ycsb-results/
 *.html
 __pycache__/
+*.jar
+tlaplus/states/
+*_TTrace_*.tla
