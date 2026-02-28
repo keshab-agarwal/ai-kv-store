@@ -1,0 +1,7 @@
+bin/
+test-run-*/
+test-quick/
+test-faults/
+ycsb-results/
+*.html
+__pycache__/
