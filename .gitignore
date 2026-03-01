@@ -1,13 +1,52 @@
+# Binaries
 bin/
+*.exe
+*.out
+task2_ycsb/bench
+
+# Go
+go.sum
+
+# Build / run artifacts
+.run/
+artifacts/
 test-run-*/
 test-quick/
 test-faults/
+
+# Benchmark results (regenerated per run)
 ycsb-results/
-*.html
-__pycache__/
-*.jar
-tlaplus/states/
-*_TTrace_*.tla
+task2_ycsb/results/
+redis-results/
 evaluation/runs/
 redis/runs/
-redis-results/
+
+# TLA+ model checker output
+tlaplus/states/
+task0_tla/states/
+*_TTrace_*.tla
+
+# Porcupine visualization
+*.html
+
+# Java
+*.jar
+*.class
+
+# Python
+__pycache__/
+*.pyc
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
