@@ -8,3 +8,6 @@ __pycache__/
 *.jar
 tlaplus/states/
 *_TTrace_*.tla
+evaluation/runs/
+redis/runs/
+redis-results/
