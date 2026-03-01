@@ -115,10 +115,12 @@ ElectCoordinator ==
     /\ coordId = 0
     /\ \E r \in AliveSet :
         /\ Cardinality(AliveSet) >= Majority
+        /\ \A rr \in AliveSet : witnessed[r] >= witnessed[rr]
         /\ coordId' = r
         /\ epoch' = epoch + 1
-        /\ witnessed' = [rr \in Replicas |-> IF alive[rr] THEN Len(ledger) ELSE witnessed[rr]]
-        /\ UNCHANGED <<alive, ledger, kvState, cState, cOp, cKey, cVal, cResult,
+        /\ witnessed' = [rr \in Replicas |-> IF alive[rr] THEN witnessed[r] ELSE witnessed[rr]]
+        /\ kvState' = [rr \in Replicas |-> IF alive[rr] THEN kvState[r] ELSE kvState[rr]]
+        /\ UNCHANGED <<alive, ledger, cState, cOp, cKey, cVal, cResult,
                         cCallTime, cReturnTime, tick, opCount, crashCount, committed, seqSpec>>
 
 \* --- Client starts a Put operation ---
@@ -175,11 +177,12 @@ CoordCommitPut(c) ==
     /\ LET entry == [op |-> "Put", key |-> cKey[c], val |-> cVal[c], client |-> c]
            newLedger == Append(ledger, entry)
            newIdx == Len(newLedger)
-           ackSet == {r \in AliveSet : witnessed[r] >= Len(ledger)}
+           fullAckSet == {r \in AliveSet : witnessed[r] >= Len(ledger)}
+           ackSet == IF BugMode THEN {coordId} ELSE fullAckSet
        IN
         /\ IF BugMode
-           THEN TRUE   \* skip majority check — intentional bug
-           ELSE Cardinality(ackSet) >= Majority
+           THEN TRUE
+           ELSE Cardinality(fullAckSet) >= Majority
         /\ ledger' = newLedger
         /\ witnessed' = [r \in Replicas |->
                             IF r \in ackSet THEN newIdx ELSE witnessed[r]]
@@ -195,7 +198,7 @@ CoordCommitPut(c) ==
                             [op |-> "Put", key |-> cKey[c], val |-> cVal[c],
                              client |-> c, callT |-> cCallTime[c], retT |-> tick + 1])
         /\ tick' = tick + 2
-        /\ UNCHANGED <<alive, coordId, epoch, cOp, cKey, cVal, opCount, crashCount>>
+        /\ UNCHANGED <<alive, coordId, epoch, cOp, cKey, cVal, cCallTime, opCount, crashCount>>
 
 \* --- Coordinator processes a pending Get ---
 CoordCommitGet(c) ==
@@ -213,7 +216,7 @@ CoordCommitGet(c) ==
                              client |-> c, callT |-> cCallTime[c], retT |-> tick + 1])
         /\ tick' = tick + 2
         /\ UNCHANGED <<alive, coordId, epoch, ledger, witnessed, kvState,
-                        cOp, cKey, cVal, opCount, crashCount, seqSpec>>
+                        cOp, cKey, cVal, cCallTime, opCount, crashCount, seqSpec>>
 
 \* --- Coordinator processes a pending Delete ---
 CoordCommitDelete(c) ==
@@ -223,11 +226,12 @@ CoordCommitDelete(c) ==
     /\ LET entry == [op |-> "Delete", key |-> cKey[c], val |-> Nil, client |-> c]
            newLedger == Append(ledger, entry)
            newIdx == Len(newLedger)
-           ackSet == {r \in AliveSet : witnessed[r] >= Len(ledger)}
+           fullAckSet == {r \in AliveSet : witnessed[r] >= Len(ledger)}
+           ackSet == IF BugMode THEN {coordId} ELSE fullAckSet
        IN
         /\ IF BugMode
            THEN TRUE
-           ELSE Cardinality(ackSet) >= Majority
+           ELSE Cardinality(fullAckSet) >= Majority
         /\ ledger' = newLedger
         /\ witnessed' = [r \in Replicas |->
                             IF r \in ackSet THEN newIdx ELSE witnessed[r]]
@@ -243,7 +247,7 @@ CoordCommitDelete(c) ==
                             [op |-> "Delete", key |-> cKey[c], val |-> Nil,
                              client |-> c, callT |-> cCallTime[c], retT |-> tick + 1])
         /\ tick' = tick + 2
-        /\ UNCHANGED <<alive, coordId, epoch, cOp, cKey, cVal, opCount, crashCount>>
+        /\ UNCHANGED <<alive, coordId, epoch, cOp, cKey, cVal, cCallTime, opCount, crashCount>>
 
 \* --- Client returns to idle after completion ---
 ClientRetire(c) ==
@@ -261,8 +265,6 @@ CrashReplica(r) ==
     /\ crashCount' = crashCount + 1
     /\ IF r = coordId
        THEN /\ coordId' = 0
-            /\ \A c \in Clients :
-                cState[c] = "pending" => cState'[c] = "idle"
             /\ cState' = [c \in Clients |-> IF cState[c] = "pending" THEN "idle" ELSE cState[c]]
        ELSE /\ coordId' = coordId
             /\ UNCHANGED cState

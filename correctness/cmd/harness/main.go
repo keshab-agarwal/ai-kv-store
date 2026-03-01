@@ -13,6 +13,10 @@ import (
 )
 
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
 	nodeCount := flag.Int("nodes", 3, "Number of nodes (3-5)")
 	duration := flag.Duration("duration", 30*time.Second, "Test duration")
 	workers := flag.Int("workers", 10, "Number of concurrent client workers")
@@ -29,9 +33,9 @@ func main() {
 	if *selftest {
 		if err := checker.RunSelfTest(); err != nil {
 			fmt.Fprintf(os.Stderr, "SELF-TEST FAILED: %v\n", err)
-			os.Exit(1)
+			return 1
 		}
-		os.Exit(0)
+		return 0
 	}
 
 	if *outDir == "" {
@@ -54,14 +58,17 @@ func main() {
 
 	logger.Println("starting cluster...")
 	if err := orch.StartAll(); err != nil {
-		logger.Fatalf("failed to start cluster: %v", err)
+		logger.Printf("failed to start cluster: %v", err)
+		orch.StopAll()
+		return 1
 	}
 	defer orch.StopAll()
 
 	historyPath := filepath.Join(*outDir, "history.jsonl")
 	recorder, err := correctness.NewHistoryRecorder(historyPath)
 	if err != nil {
-		logger.Fatalf("create history recorder: %v", err)
+		logger.Printf("create history recorder: %v", err)
+		return 1
 	}
 
 	cfg := correctness.WorkloadConfig{
@@ -115,7 +122,8 @@ func main() {
 		logger.Println("running Porcupine linearizability check...")
 		result, err := checker.RunCheckerOnFile(historyPath, *checkTimeout)
 		if err != nil {
-			logger.Fatalf("checker error: %v", err)
+			logger.Printf("checker error: %v", err)
+			return 1
 		}
 
 		logger.Printf("checker: %s (checked=%d skipped=%d timeouts=%d elapsed=%dms)",
@@ -137,8 +145,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Details: %s\n", summary.CheckerResult)
 		fmt.Fprintf(os.Stderr, "History: %s\n", historyPath)
 		fmt.Fprintf(os.Stderr, "Seed: %d (use -seed=%d to reproduce)\n", seed, seed)
-		os.Exit(1)
+		return 1
 	}
 
 	fmt.Println("\n*** ALL CHECKS PASSED ***")
+	return 0
 }
