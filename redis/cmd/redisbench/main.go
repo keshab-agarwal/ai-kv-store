@@ -78,18 +78,18 @@ func main() {
 	}
 
 	meta := map[string]interface{}{
-		"target":       "redis",
-		"addrs":        addrList,
-		"cluster_mode": *clusterMode,
-		"pool_size":    *poolSize,
-		"db":           *db,
-		"record_count": *recordCount,
-		"op_count":     *opCount,
-		"threads":      *threads,
-		"value_size":   *valueSize,
-		"read_prop":    *readProp,
-		"update_prop":  *updateProp,
-		"delete_prop":  *deleteProp,
+		"target":        "redis",
+		"addrs":         addrList,
+		"cluster_mode":  *clusterMode,
+		"pool_size":     *poolSize,
+		"db":            *db,
+		"record_count":  *recordCount,
+		"op_count":      *opCount,
+		"threads":       *threads,
+		"value_size":    *valueSize,
+		"read_prop":     *readProp,
+		"update_prop":   *updateProp,
+		"delete_prop":   *deleteProp,
 		"zipfian_theta": *theta,
 	}
 	metaJSON, _ := json.MarshalIndent(meta, "", "  ")
