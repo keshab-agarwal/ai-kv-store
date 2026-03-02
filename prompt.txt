@@ -1,0 +1,277 @@
+# Distributed In-Memory Key-Value Store — Full Specification
+
+All of these tools must be enterprise grade and ready to ship into production.
+
+I am building a distributed in-memory key-value store and you must treat the following as hard requirements. Tasks can be completed in any order.
+
+IMPORTANT: Do NOT hardcode or prescribe a named consensus algorithm (e.g., do not force Paxos/Raft by name). You must design whatever is necessary to satisfy the requirements and validate it via testing + TLA+. The goal is to invent the design from scratch while meeting the spec. KEEP EACH TASK IN A DIFFERENT FOLDER FOR MODULAR PROGRAMMING.
+
+Be creative: THE MOST IMPORTANT PART OF THIS IS TO BE CREATIVE AND BRING IN ANYTHING FROM ANY SCIENCE FIELD TO GET IT DONE. DONT RELY ON JUST PAXOS OR RAFT OR ANY EXISTING PROTOCOL AND GET THIS DOWN TO THE LOWEST LATENCY POSSIBLE.
+
+========================
+Task #1:
+Build a distributed in-memory key-value store
+========================
+
+SPECIFICATIONS:
+API: Get/Put/Delete (single-key)
+Key: 128-bit RANDOM opaque (treat as bytes[16] / 16-byte string)
+Value: max 1 MiB. Typical sizes: mean ≈ 1 KiB
+Goal: Latency-focused, state-of-the-art millisecond (ms) latencies
+Workload mix: 95% Get / 4% Put / 1% Delete
+Capacity: ≥ 1B distinct keys over time
+Deployment: Single cluster, Single datacenter (single AZ), Single region
+
+SHARDING & REPLICATION:
+The number of shards is specified at cluster startup and is STATIC for the lifetime of the cluster (no resharding).
+Each shard has exactly 3 replicas (replication factor = 3) for redundancy.
+Shard-replicas SHOULD be placed on different physical nodes to maximize fault isolation (spread across datacenter rack positions where possible). If there are fewer nodes than replicas, co-location is acceptable but must be documented.
+Keys are 128-bit random and opaque; you choose the partitioning function to assign keys to shards (hash-based partitioning is natural given the random keyspace, but justify your choice).
+Nodes: Range from 3 to 5 nodes in the cluster.
+
+FAULT TOLERANCE:
+The system must tolerate exactly 1 fail-stop node failure (crash, no Byzantine faults).
+When a node crashes, the surviving replicas of every shard that had a copy on the failed node must continue serving reads and writes with no consistency loss.
+Restore full replication (re-replicate under-replicated shards to a recovered or replacement node) within ≤ 30 seconds of the failed node returning.
+
+CONSISTENCY:
+Strong consistency (Linearizability, Herlihy–Wing). This KV store is one cluster so does not need to worry about cluster-to-cluster communication.
+
+Definitions:
+A history H is the observed concurrent execution trace: a time-ordered sequence of invocation events and response events for operations on the object. An operation is pending in H if its invocation has no matching response later in H. Two events match if they are the invocation/response of the same operation from the same process (same object and process). H' is an extension of H formed by appending zero or more response events to H (to finish some pending operations). complete(H') is the maximal subsequence of H' containing only invocations that have matching responses in H' and those matching responses (equivalently: drop any still-pending invocations). A sequential history S is a single-threaded (non-overlapping) sequence of complete operations (invocation immediately followed by its matching response). S is legal if it satisfies the object's sequential specification (the normal single-threaded semantics). Two histories are equivalent if, for every process, the sequence of operations performed by that process (and their return values) is the same in both histories. Define the real-time precedence relation <_H on operations in H as: a <_H b iff the response of operation a occurs before the invocation of operation b in H. Let <_S be the total order of operations in sequential history S.
+
+Linearizability conditions (must both hold):
+L1: complete(H') is equivalent to some legal sequential history S.
+L2: <_H ⊆ <_S (if a finishes before b starts in H, then a must appear before b in S).
+
+PERSISTENCE:
+Data must be durable. The store is in-memory for the hot path (reads/writes serve from RAM), but all committed writes must be persisted to disk such that:
+- A single node crash and restart recovers ALL previously committed data for the shards it owns (from its local persistent state + catch-up from peers if needed).
+- A full cluster restart (all nodes stop and restart) recovers all committed data with zero data loss.
+You choose the persistence mechanism (WAL, snapshotting, hybrid, or other). Document your choice and its tradeoffs. The persistence path must NOT dominate the latency budget — design it so the common-case write latency remains in the low-millisecond range.
+
+CLIENT LIBRARY:
+You must build the client library as part of this task. The client library is how all external callers (benchmarks, test harnesses, applications) interact with the cluster. Design decisions you must make and document:
+- Transport protocol (gRPC, raw TCP, UDP, custom, etc.)
+- Serialization format (protobuf, flatbuffers, msgpack, custom, etc.)
+- How the client discovers which node(s) to talk to (static config, seed nodes, service discovery, etc.)
+- How the client routes requests to the correct shard (client-side routing with a partition map, or proxy/coordinator node, etc.)
+- Connection pooling and retry strategy
+- Timeout semantics and how TIMEOUT is surfaced to the caller
+The client library must expose the Get/Put/Delete API specified below. The YCSB binding (Task #2) and correctness harness (Task #3) will use this client library directly — design it to be clean and embeddable.
+
+CONCURRENCY MODEL:
+You choose the concurrency model for the server nodes. Document and justify your choice:
+- Thread-per-connection, thread pool, event loop (epoll/io_uring), actor model, coroutines/green threads, or hybrid
+- How concurrent operations on the same key are serialized within a shard
+- How the replication protocol interacts with the concurrency model
+
+PERFORMANCE OPTIMIZATION:
+You must optimize the system for the specified workload (95% Get, 4% Put, 1% Delete with Zipfian access). This means:
+- The read path should be as fast as physically possible (zero-copy where feasible, minimal lock contention, cache-friendly data structures)
+- The write path must satisfy linearizability and persistence requirements but should still target low-millisecond latency
+- Network round-trips should be minimized; batch or pipeline replication where safe to do so
+- Profile and document where the latency goes (network, serialization, persistence, consensus)
+You are expected to make aggressive engineering choices. Justify them.
+
+IMPLEMENTATION LANGUAGE:
+You choose the implementation language for the KV store, client library, and any supporting infrastructure. Document your choice and rationale. The only constraint is that the Porcupine linearizability checker (Task #3) must remain in Go (it's a Go library). Everything else is your call.
+
+OUTPUT (from client side):
+Put(key, value) → result
+Returns OK if the write is committed and persisted.
+Returns ERROR if the write fails.
+Returns TIMEOUT if the client cannot determine whether the write committed (client may retry).
+
+Get(key) → result
+Returns FOUND(value) if the key exists.
+Returns NOT_FOUND if the key does not exist.
+Returns ERROR or TIMEOUT on failure.
+
+Delete(key) → result
+Returns OK if the delete is committed (idempotent: deleting a missing key may still return OK).
+Returns ERROR or TIMEOUT on failure.
+
+========================
+Task #2:
+YCSB performance harness (Zipfian)
+========================
+
+Create a complete, runnable YCSB benchmark setup that generates the desired workload mix and uses Zipfian key selection. The YCSB binding MUST use the client library from Task #1.
+
+SPECIFICATIONS:
+YCSB workload file(s) that satisfy:
+requestdistribution=zipfian
+readproportion=0.95
+updateproportion=0.04
+deleteproportion=0.01
+scanproportion=0.0
+insertproportion=0.0
+(unless you choose to model initial loading; if so, keep run-phase insertproportion=0)
+
+YCSB COMPATIBILITY REQUIREMENTS:
+YCSB's DB interface requires these methods: read(), insert(), update(), delete(), scan().
+My KV store only supports Get/Put/Delete (single-key) and does NOT support scans/range queries.
+Implement the YCSB binding using this exact mapping:
+
+YCSB read(key) -> KV Get(key)
+YCSB insert(key, value) -> KV Put(key, value) (treat insert as Put new key)
+YCSB update(key, value) -> KV Put(key, value) (overwrite)
+YCSB delete(key) -> KV Delete(key)
+YCSB scan(startKey, count) -> UNSUPPORTED, but still must be implemented:
+Return a clear "unsupported" status (or OK with empty results), AND ensure scans are never generated by using scanproportion=0 in workload files.
+Do NOT add features to the KV store beyond Get/Put/Delete.
+
+OUTPUT:
+A configuration section that sets recordcount/operationcount and explains how to scale from 1M keys to 100M keys.
+Latency/throughput reporting instructions and expected output formats.
+Include graphs and numbers for p99, p95 latency.
+
+========================
+Task #3:
+Custom correctness harness + fault injection + Porcupine linearizability checking
+(NO Jepsen in this iteration)
+========================
+
+Build a custom, production-grade correctness test harness for THIS KV store that uses the client library from Task #1. The harness must be adapted to the actual cluster topology, sharding scheme, replication protocol, and persistence model that you built. Do not write a generic harness — tailor it to test the specific design decisions you made.
+
+The harness must:
+- deploy N nodes (N=3..5) with the configured number of shards (RF=3 per shard),
+- start/stop them,
+- can crash exactly 1 node and recover it,
+- generate concurrent client traffic with the 95/4/1 mix,
+- record an execution history suitable for linearizability checking,
+- and verify linearizability using Porcupine (Go library): https://github.com/anishathalye/porcupine
+
+Hard requirements:
+
+A) Node orchestration + fault injection
+- Provide a local runner that can start a multi-node cluster (3-node default).
+- Must support: start node i, stop node i, crash node i (hard kill), recover node i (restart).
+- Crash/recovery must occur DURING the workload run (not only between runs).
+- After a crashed node recovers, the harness must verify that re-replication completes and persistence is intact (the recovered node should serve the data it had before the crash, possibly after catch-up from peers).
+- Crash schedule must be reproducible via a seed.
+
+B) Workload generator
+- Must generate: 95% Get / 4% Put / 1% Delete.
+- Keys are 128-bit opaque; values up to configurable max (include a mode that uses realistic sizes up to 1 MiB).
+- Must support high concurrency (configurable number of client workers).
+- Must emit operation invocations and completions with enough information to reconstruct real-time precedence (<_H).
+
+C) History format + artifacts
+- Must write artifacts to a per-run directory including:
+  - a machine-readable history file (e.g., JSONL) with: op_id, client_id, call_time, return_time, op_type, key, input_value, output/status.
+  - node logs and harness logs
+  - a single summary report (pass/fail + counters + timings)
+- The history format must be stable and documented.
+
+D) Porcupine integration (required, must be in Go)
+- Provide a Go-based checker tool in-repo that:
+  - loads the recorded history,
+  - builds Porcupine operations with call/return times,
+  - defines a sequential specification/model for the KV semantics (Get/Put/Delete, NOT_FOUND, Delete idempotence),
+  - runs the Porcupine linearizability check,
+  - outputs PASS/FAIL and writes debug artifacts (e.g., a minimized failing subset and/or visualization if available).
+- The harness must run this checker automatically at the end of a test run.
+
+E) Handling TIMEOUT (must be explicitly addressed)
+- The harness must not silently ignore TIMEOUT.
+- Choose and implement one clear strategy:
+  - either retry-with-idempotency so TIMEOUT is rare and operations become determinate for checking, OR
+  - record TIMEOUT in a way that preserves correctness checking soundness (explain how the checker treats them).
+- Document the chosen strategy and its implications.
+
+F) Self-test / negative control (to prove the checker works)
+- Include a built-in self-test mode that:
+  - generates a known-good history and confirms Porcupine PASS,
+  - then mutates or simulates a known-bad history and confirms Porcupine FAIL.
+- This must run without needing the full KV cluster, so the checker pipeline can be validated independently.
+
+G) Exact commands + debugging guide
+- Provide exact commands to:
+  - start the cluster,
+  - run the harness (no faults),
+  - run the harness (with 1-node crash + recovery),
+  - rerun with same seed for deterministic repro,
+  - run the Porcupine checker on a saved history.
+- Provide a short guide explaining how to interpret failures and locate the violating operations.
+
+========================
+Task #4:
+TLA+ spec (fresh + TLC runnable) for linearizability
+========================
+
+Produce a new TLA+ specification that compiles and runs with TLC. Please check the spec with the tla2tools.jar file in the tlaplus folder.
+
+It must model:
+- Multiple clients, multiple shards, multiple replicas per shard
+- The replication / commitment protocol you actually built (not generic synchronous replication — model what you implemented)
+- One-node crash + recovery within a bounded time window (model as bounded steps)
+- Session/client operations: Get/Put/Delete
+- Linearizability as a safety property consistent with the definition in Task #1 (real-time precedence + legal sequential order)
+- Persistence: a crashed node that recovers must not lose committed data
+- At least one additional safety property (e.g., reads never return values never written)
+
+Critical constraint:
+- Do NOT copy structure or state representation from existing consistency specs.
+- Be creative: use a different state representation and transitions. THE MOST IMPORTANT PART OF THIS IS TO BE CREATIVE AND BRING IN ANYTHING FROM ANY SCIENCE FIELD TO GET IT DONE.
+
+Provide:
+- .tla module(s)
+- a TLC .cfg file with finite constants
+- instructions to run TLC
+- what counterexamples would look like and how to read them
+- include a "bug mode" or alternate configuration that intentionally produces a counterexample (to prove the spec + property wiring is correct)
+
+========================
+Task #5 (OPTIONAL):
+Observability — Prometheus metrics + event logging
+========================
+
+Add lightweight observability to the KV store:
+
+METRICS (exposed as a Prometheus-compatible /metrics endpoint on each node):
+- Operation counters: total Get, Put, Delete requests (labeled by status: OK, ERROR, TIMEOUT, NOT_FOUND)
+- Operation latency histograms: p50, p95, p99 for Get, Put, Delete (server-side)
+- Replication lag: time or operation count behind the leader/primary for each shard-replica
+- Shard health: number of live replicas per shard, under-replicated shard count
+- Node-level: memory usage, number of keys held, WAL/persistence queue depth
+- Cluster-level: total keys across all shards, number of healthy nodes
+
+EVENT LOG:
+Each node should log major events in a structured format (JSON) including at minimum:
+- Node startup / shutdown / crash recovery
+- Shard assignment changes (new shard-replica assigned, shard-replica removed)
+- Leader/primary elections or role changes per shard
+- Re-replication start/complete
+- Persistence events (snapshot taken, WAL truncated)
+- Client connection events (optional, may be noisy at scale)
+
+Provide a sample Prometheus scrape configuration and a suggested Grafana dashboard JSON (or at minimum, a list of recommended panels and their PromQL queries).
+
+========================
+OUTPUT FORMAT (must follow):
+========================
+
+1) Top-level repo layout as a file tree
+
+2) Then print each file with a header like:
+   "=== path/to/file ==="
+   followed by full contents
+
+3) Then a "How to run" section with exact commands (copy/paste runnable) for:
+   - building + running a 3-node cluster locally (specify shard count at startup)
+   - running YCSB
+   - running the custom harness (no faults + with crash/recovery)
+   - running the Porcupine checker on a saved history
+   - running TLC on the TLA+ spec
+   - (if Task 5 done) starting Prometheus and viewing metrics
+
+4) Then a "Plug points" section showing EXACTLY where I insert:
+   - my node start/stop/crash/recover commands (if needed)
+   - my client calls (Get/Put/Delete)
+   - any environment variables/config used by harnesses
+
+Do not give me high-level descriptions only.
+I need concrete code, file trees, and runnable artifacts.
+Thanks!
