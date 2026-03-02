@@ -65,12 +65,18 @@ cleanup_ycsb_cluster() {
     sleep 1
 }
 
+cleanup_ycsb_data() {
+    # YCSB nodes use ./data-<id> in the repo root when no -data flag is given.
+    # Remove them so stale WAL data from previous runs doesn't interfere.
+    rm -rf "$REPO_ROOT/data-1" "$REPO_ROOT/data-2" "$REPO_ROOT/data-3"
+}
+
 kill_stale_kvnodes() {
     pkill -f "kvnode -id=" 2>/dev/null || true
     sleep 1
 }
 
-trap 'kill_stale_kvnodes; cleanup_ycsb_cluster' EXIT
+trap 'kill_stale_kvnodes; cleanup_ycsb_cluster; cleanup_ycsb_data' EXIT
 
 cd "$REPO_ROOT"
 
@@ -193,6 +199,7 @@ echo -e "${BOLD}▸ Phase 6: YCSB Benchmark (load 10K + run 50K ops)${NC}"
 # Kill any leftover nodes from Phase 5
 kill_stale_kvnodes
 cleanup_ycsb_cluster
+cleanup_ycsb_data
 
 peers1="2=localhost:$((YCSB_RPC_BASE+1)),3=localhost:$((YCSB_RPC_BASE+2))"
 peers2="1=localhost:$((YCSB_RPC_BASE)),3=localhost:$((YCSB_RPC_BASE+2))"
@@ -262,7 +269,21 @@ echo -e "${BOLD}▸ Phase 7: TLC Model Checker${NC}"
 TLA_DIR="$REPO_ROOT/tlaplus"
 TLC_JAR="$TLA_DIR/tla2tools.jar"
 
-if ! command -v java &>/dev/null; then
+# Find a working java (system java on macOS may be a non-functional stub)
+JAVA_CMD=""
+for _candidate in \
+    "$(command -v java 2>/dev/null)" \
+    /opt/homebrew/opt/openjdk/bin/java \
+    /usr/local/opt/openjdk/bin/java \
+    /opt/homebrew/bin/java; do
+    if [ -n "$_candidate" ] && [ -x "$_candidate" ] && \
+       "$_candidate" -version >/dev/null 2>&1; then
+        JAVA_CMD="$_candidate"
+        break
+    fi
+done
+
+if [ -z "$JAVA_CMD" ]; then
     record "tlc_normal" "SKIP" "java not found"
     record "tlc_bug" "SKIP" "java not found"
 elif [ ! -f "$TLC_JAR" ]; then
@@ -272,9 +293,9 @@ else
     # Normal mode — should PASS (no invariant violations)
     echo "  running TLC normal mode..."
     tlc_normal_exit=0
-    (cd "$TLA_DIR" && java -jar tla2tools.jar \
+    (cd "$TLA_DIR" && "$JAVA_CMD" -XX:+UseParallelGC -jar tla2tools.jar \
         -config KVStore.cfg KVStore.tla \
-        -workers 1 -cleanup) \
+        -workers 2 -cleanup) \
         > "$RUN_DIR/tlc-normal.log" 2>&1 || tlc_normal_exit=$?
 
     if grep -q "Model checking completed. No error has been found" "$RUN_DIR/tlc-normal.log" 2>/dev/null; then
@@ -290,9 +311,9 @@ else
     # Bug mode — should FAIL (find a counterexample)
     echo "  running TLC bug mode..."
     tlc_bug_exit=0
-    (cd "$TLA_DIR" && java -jar tla2tools.jar \
+    (cd "$TLA_DIR" && "$JAVA_CMD" -XX:+UseParallelGC -jar tla2tools.jar \
         -config KVStoreBug.cfg KVStore.tla \
-        -workers 1 -cleanup) \
+        -workers 2 -cleanup) \
         > "$RUN_DIR/tlc-bug.log" 2>&1 || tlc_bug_exit=$?
 
     if grep -q "Error:" "$RUN_DIR/tlc-bug.log" 2>/dev/null && [ "$tlc_bug_exit" -ne 0 ]; then
