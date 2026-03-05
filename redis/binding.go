@@ -5,8 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"ai-kv-store/kvstore"
-	"ai-kv-store/ycsb"
+	"ai-kv-store/redis/ycsb"
 
 	goredis "github.com/redis/go-redis/v9"
 )
@@ -84,46 +83,46 @@ func NewRedisBinding(cfg RedisConfig) (*RedisBinding, error) {
 	}, nil
 }
 
-func (b *RedisBinding) Read(key string) (kvstore.Status, []byte, error) {
+func (b *RedisBinding) Read(key string) (ycsb.Status, []byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), b.timeout)
 	defer cancel()
 
 	val, err := b.client.Get(ctx, key).Bytes()
 	if err == goredis.Nil {
-		return kvstore.StatusNotFound, nil, nil
+		return ycsb.StatusNotFound, nil, nil
 	}
 	if err != nil {
-		return kvstore.StatusError, nil, err
+		return ycsb.StatusError, nil, err
 	}
-	return kvstore.StatusFound, val, nil
+	return ycsb.StatusFound, val, nil
 }
 
-func (b *RedisBinding) Insert(key string, value []byte) (kvstore.Status, error) {
+func (b *RedisBinding) Insert(key string, value []byte) (ycsb.Status, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), b.timeout)
 	defer cancel()
 
 	if err := b.client.Set(ctx, key, value, 0).Err(); err != nil {
-		return kvstore.StatusError, err
+		return ycsb.StatusError, err
 	}
-	return kvstore.StatusOK, nil
+	return ycsb.StatusOK, nil
 }
 
-func (b *RedisBinding) Update(key string, value []byte) (kvstore.Status, error) {
+func (b *RedisBinding) Update(key string, value []byte) (ycsb.Status, error) {
 	return b.Insert(key, value)
 }
 
-func (b *RedisBinding) Delete(key string) (kvstore.Status, error) {
+func (b *RedisBinding) Delete(key string) (ycsb.Status, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), b.timeout)
 	defer cancel()
 
 	if err := b.client.Del(ctx, key).Err(); err != nil {
-		return kvstore.StatusError, err
+		return ycsb.StatusError, err
 	}
-	return kvstore.StatusOK, nil
+	return ycsb.StatusOK, nil
 }
 
-func (b *RedisBinding) Scan(_ string, _ int) (kvstore.Status, error) {
-	return kvstore.StatusOK, nil
+func (b *RedisBinding) Scan(_ string, _ int) (ycsb.Status, error) {
+	return ycsb.StatusOK, nil
 }
 
 // Close releases the underlying connection pool.

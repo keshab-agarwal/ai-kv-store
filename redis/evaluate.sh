@@ -2,9 +2,6 @@
 #
 # evaluate.sh — Redis benchmark evaluation harness.
 #
-# Runs the same YCSB workload against Redis that evaluate.sh runs against
-# the custom KV store, producing directly comparable output.
-#
 # Prerequisites:
 #   - Redis server running (or docker-compose up from this directory)
 #   - Go 1.20+
@@ -238,32 +235,6 @@ if python3 -c "import matplotlib" 2>/dev/null && [ -f "$full_outdir/run_latencie
     fi
 else
     record "latency_plots" "SKIP" "matplotlib not installed or no CSV"
-fi
-
-# ─────────────────────────────────────────────────
-# Phase 6: Comparison (if KV store results exist)
-# ─────────────────────────────────────────────────
-echo -e "${BOLD}▸ Phase 6: KV Store Comparison${NC}"
-
-# Look for the most recent KV store evaluation results
-KV_RESULTS=""
-for d in "$REPO_ROOT"/evaluation/runs/*/ycsb-results/run_report.json; do
-    [ -f "$d" ] && KV_RESULTS="$d"
-done
-
-if [ -n "$KV_RESULTS" ] && [ -f "$full_outdir/run_report.json" ]; then
-    compare_dir="$RUN_DIR/comparison"
-    mkdir -p "$compare_dir"
-    if python3 "$SCRIPT_DIR/scripts/compare.py" "$KV_RESULTS" "$full_outdir/run_report.json" "$compare_dir" \
-        > "$RUN_DIR/comparison.log" 2>&1; then
-        record "comparison" "PASS"
-        cat "$RUN_DIR/comparison.log"
-    else
-        record "comparison" "FAIL" "see comparison.log"
-    fi
-else
-    record "comparison" "SKIP" "no KV store results found for comparison"
-    echo "    Run evaluation/evaluate.sh first to produce KV store results."
 fi
 
 # ─────────────────────────────────────────────────

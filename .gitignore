@@ -1,13 +1,4 @@
 bin/
-test-run-*/
-test-quick/
-test-faults/
-ycsb-results/
-*.html
 __pycache__/
 *.jar
-tlaplus/states/
-*_TTrace_*.tla
-evaluation/runs/
-redis/runs/
 redis-results/
