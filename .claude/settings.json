@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//opt/homebrew/bin/**)",
+      "Bash(/opt/homebrew/bin/redis-cli -p 6379 PING)"
+    ]
+  }
+}
