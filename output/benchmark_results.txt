@@ -1,0 +1,21 @@
+?   	kvstore	[no test files]
+?   	kvstore/benchmark	[no test files]
+?   	kvstore/client	[no test files]
+PASS
+ok  	kvstore/cluster	0.137s
+?   	kvstore/cmd/benchmark	[no test files]
+?   	kvstore/cmd/kvstore	[no test files]
+PASS
+ok  	kvstore/correctness	0.119s
+PASS
+ok  	kvstore/instrumentation	0.139s
+?   	kvstore/kv	[no test files]
+PASS
+ok  	kvstore/kvstore	0.388s
+?   	kvstore/proto/kvpb	[no test files]
+PASS
+ok  	kvstore/replication	0.119s
+PASS
+ok  	kvstore/server	0.173s
+PASS
+ok  	kvstore/storage	0.198s
