@@ -58,7 +58,7 @@ def _call_claude(prompt: str, system: str, max_tokens: int = 8192) -> str:
 
 
 def _call_openai(prompt: str, system: str) -> str:
-    from openai import run
+    from openai_provider import run
     return run(prompt, instructions=system)
 
 

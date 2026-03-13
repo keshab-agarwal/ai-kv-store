@@ -13,9 +13,20 @@ def get_shell_tool():
     import subprocess
 
     async def run_shell(request) -> str:
-        command = getattr(request, "command", None) or getattr(request, "input", str(request))
-        proc = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=60)
-        return proc.stdout or proc.stderr or f"exit={proc.returncode}"
+        commands = request.data.action.commands
+        script = "\n".join(commands)
+        proc = subprocess.run(
+            script, shell=True, capture_output=True, text=True,
+            timeout=60, encoding="utf-8", errors="replace",
+        )
+        output = ""
+        if proc.stdout:
+            output += proc.stdout
+        if proc.stderr:
+            output += proc.stderr
+        if not output:
+            output = f"exit={proc.returncode}"
+        return output
 
     return ShellTool(executor=run_shell)
 

@@ -80,7 +80,7 @@ def _call_manager(prompt: str, system: str, provider: str) -> str:
         from claude import run
         return run(prompt, system=system, max_tokens=16384)
     elif provider == "openai":
-        from openai import run
+        from openai_provider import run
         return run(prompt, instructions=system)
     else:
         raise ValueError(f"Unknown provider: {provider}")
@@ -91,7 +91,7 @@ def _call_engineer(prompt: str, system: str, provider: str) -> str:
         from claude import run_agent
         return run_agent(prompt, system_prompt=system, cwd=REPO_ROOT)
     elif provider == "openai":
-        from openai import run, get_shell_tool
+        from openai_provider import run, get_shell_tool
         return run(prompt, instructions=system, tools=[get_shell_tool()])
     else:
         raise ValueError(f"Unknown provider: {provider}")
@@ -102,7 +102,7 @@ def _call_verifier(prompt: str, system: str, provider: str) -> str:
         from claude import run_agent
         return run_agent(prompt, system_prompt=system, cwd=REPO_ROOT)
     elif provider == "openai":
-        from openai import run, get_shell_tool
+        from openai_provider import run, get_shell_tool
         return run(prompt, instructions=system, tools=[get_shell_tool()])
     else:
         raise ValueError(f"Unknown provider: {provider}")
@@ -321,8 +321,10 @@ def run_pipeline(
     verifier_provider: str = "claude",
     user_prompt: str | None = None,
     interactive: bool = False,
+    resume: bool = False,
 ) -> str:
-    _clean_previous_run()
+    if not resume:
+        _clean_previous_run()
     design_spec = _load_file(DESIGN_SPEC_PATH, "Design spec")
     manager_system = _load_file(MANAGER_PROMPT_PATH, "Manager system prompt")
     engineer_system = _load_file(ENGINEER_PROMPT_PATH, "Engineer system prompt")
@@ -332,7 +334,10 @@ def run_pipeline(
     TOOLS_GENERATED_DIR.mkdir(parents=True, exist_ok=True)
 
     logs: list[str] = []
-    _log(logs, f"Pipeline started: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    if resume and LOGS_PATH.exists():
+        logs.append(LOGS_PATH.read_text().rstrip())
+        logs.append("")
+    _log(logs, f"Pipeline {'resumed' if resume else 'started'}: {time.strftime('%Y-%m-%d %H:%M:%S')}")
     _log(logs, f"Manager provider:  {manager_provider}")
     _log(logs, f"Engineer provider: {engineer_provider}")
     _log(logs, f"Verifier provider: {verifier_provider}")
@@ -533,6 +538,11 @@ def main() -> int:
         action="store_true",
         help="Pause after each iteration for user feedback",
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Continue from existing output/ state without wiping it",
+    )
     args = parser.parse_args()
 
     if args.max_iterations < 1:
@@ -553,6 +563,7 @@ def main() -> int:
             verifier_provider=args.verifier_provider,
             user_prompt=user_prompt,
             interactive=args.interactive,
+            resume=args.resume,
         )
         print(result)
         return 0

@@ -79,7 +79,7 @@ def _call_eval_agent(prompt: str, system: str, provider: str) -> str:
         from claude import run_agent
         return run_agent(prompt, system_prompt=system, cwd=REPO_ROOT)
     elif provider == "openai":
-        from openai import run, get_shell_tool
+        from openai_provider import run, get_shell_tool
         return run(prompt, instructions=system, tools=[get_shell_tool()])
     else:
         raise ValueError(f"Unknown provider: {provider}")
