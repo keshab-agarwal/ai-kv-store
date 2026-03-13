@@ -1,13 +1,19 @@
-bin/
-test-run-*/
-test-quick/
-test-faults/
-ycsb-results/
-*.html
+# Virtual environments (create with: python -m venv .venv)
+.venv/
+venv/
+env/
+
+# Env and IDE
+.env
+.idea/
+.vscode/
+*.pyc
 __pycache__/
-*.jar
-tlaplus/states/
-*_TTrace_*.tla
-evaluation/runs/
-redis/runs/
-redis-results/
+
+# Pipeline / workflow outputs
+storage_plan.txt
+log.txt
+design_spec.txt
+comparison.txt
+output/
+tools/generated/

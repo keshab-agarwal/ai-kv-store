@@ -1,0 +1,51 @@
+# Round 1 — Answer the questions below
+# Write your answers under each question.
+# Lines starting with # are ignored.
+# Save this file when done, then go back to the terminal and press Enter.
+
+1. **Replication Architecture**: You mention "3 to 5 nodes (each with 2-3 replicas PER node)" - this is ambiguous. Do you mean:
+   - A: 3-5 nodes total, where each key is replicated 2-3 times across different nodes, OR  
+   - B: 3-5 physical nodes, where each node internally maintains 2-3 replicas of its data locally?
+
+2. **Data Distribution Strategy**: How should the 1B keys be distributed across nodes? Do you want:
+   - Consistent hashing with configurable replication factor
+   - Range-based partitioning
+   - Full replication (every node has all data)
+   - Some other approach?
+
+3. **Memory Capacity Planning**: With 1B keys at ~1KiB average (plus up to 1MiB values), you're looking at ~1TB+ of data. What are the per-node memory assumptions? Should the system:
+   - Assume sufficient RAM to hold the full dataset in memory
+   - Include eviction/cache policies for memory pressure
+   - Fail/reject operations when memory is exhausted?
+
+4. **Consensus Scope**: When you say "design whatever is necessary" instead of using named algorithms - do you want consensus at the:
+   - Per-operation level (each Get/Put/Delete goes through consensus)
+   - Log/journal level (operations are ordered via consensus then applied)
+   - Configuration/membership level only
+   - Some hybrid approach?
+
+5. **Recovery Guarantees**: The "≤ 30 seconds to restore replication" requirement - does this mean:
+   - 30s to detect failure + elect new leaders + resume serving requests, OR
+   - 30s to fully rebuild/sync lost replicas back to the target replication factor, OR
+   - Both?
+
+6. **Client Interface Protocol**: Should the Get/Put/Delete API be exposed via:
+   - HTTP REST endpoints
+   - gRPC/protobuf
+   - Raw TCP with custom protocol
+   - Multiple protocols supported?
+
+7. **TLA+ Verification Scope**: You want TLA+ validation - should this model:
+   - Just the core consistency protocol you design
+   - The full system including failure detection, recovery, and membership
+   - Client-visible behaviors and API semantics
+   - All of the above?
+
+# --- Write your answers below this line ---
+1) I mean option B so more nodes 
+2) You can choose how you support the 1 billion keys but this is more of an implmentation question 
+3) Assume a max of 1GiB and use an eviction if necessary 
+4) Hybrid, whatever is needed to reach the EVAL of <.5 ms on p50 for 10,000 ops/sec
+5) The first bullet
+6) The fastest and simplest protocol 
+7) ignore TLA + for now
