@@ -15,6 +15,21 @@ def run_agent(
     cwd: str | Path | None = None,
     max_turns: int | None = None,
 ) -> str:
+    text, _, _ = run_agent_with_usage(
+        prompt, allowed_tools=allowed_tools, system_prompt=system_prompt,
+        cwd=cwd, max_turns=max_turns,
+    )
+    return text
+
+
+def run_agent_with_usage(
+    prompt: str,
+    allowed_tools: list[str] | None = None,
+    system_prompt: str | None = None,
+    cwd: str | Path | None = None,
+    max_turns: int | None = None,
+) -> tuple[str, int, int]:
+    """Returns (text, input_tokens, output_tokens). Token counts are best-effort."""
     if not os.environ.get("ANTHROPIC_API_KEY"):
         raise ValueError("ANTHROPIC_API_KEY not set")
 
@@ -34,17 +49,25 @@ def run_agent(
 
     options = ClaudeAgentOptions(**options_kw)
     chunks: list[str] = []
+    total_input = 0
+    total_output = 0
 
     async def collect():
+        nonlocal total_input, total_output
         async for message in query(prompt=prompt, options=options):
             msg_type = type(message).__name__
             if "Assistant" in msg_type and hasattr(message, "content"):
                 for block in message.content:
                     if hasattr(block, "text"):
                         chunks.append(block.text)
+            usage = getattr(message, "usage", None)
+            if usage is not None:
+                total_input += getattr(usage, "input_tokens", 0)
+                total_output += getattr(usage, "output_tokens", 0)
         return "\n".join(chunks) if chunks else ""
 
-    return asyncio.run(collect())
+    text = asyncio.run(collect())
+    return text, total_input, total_output
 
 
 def run(
@@ -53,6 +76,17 @@ def run(
     max_tokens: int = 1024,
     system: str | None = None,
 ) -> str:
+    text, _, _ = run_with_usage(prompt, model=model, max_tokens=max_tokens, system=system)
+    return text
+
+
+def run_with_usage(
+    prompt: str,
+    model: str = "claude-sonnet-4-20250514",
+    max_tokens: int = 1024,
+    system: str | None = None,
+) -> tuple[str, int, int]:
+    """Returns (text, input_tokens, output_tokens)."""
     from anthropic import Anthropic
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -69,7 +103,11 @@ def run(
         kwargs["system"] = system
 
     message = client.messages.create(**kwargs)
+    text = ""
     for block in message.content:
         if hasattr(block, "text"):
-            return block.text
-    return ""
+            text = block.text
+            break
+    input_tokens = getattr(message.usage, "input_tokens", 0)
+    output_tokens = getattr(message.usage, "output_tokens", 0)
+    return text, input_tokens, output_tokens

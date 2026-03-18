@@ -37,6 +37,17 @@ def run(
     tools: list | None = None,
     model: str = "gpt-5.4",
 ) -> str:
+    text, _, _ = run_with_usage(input_text, instructions=instructions, tools=tools, model=model)
+    return text
+
+
+def run_with_usage(
+    input_text: str,
+    instructions: str = "You are a helpful assistant.",
+    tools: list | None = None,
+    model: str = "gpt-5.4",
+) -> tuple[str, int, int]:
+    """Returns (text, input_tokens, output_tokens) summed across all turns."""
     from agents import Agent, Runner
 
     api_key = os.environ.get("OPENAI_API_KEY")
@@ -45,7 +56,14 @@ def run(
 
     agent = Agent(name="Assistant", instructions=instructions, model=model, tools=tools or [])
     result = asyncio.run(Runner.run(agent, input_text))
-    return result.final_output or ""
+    total_input = 0
+    total_output = 0
+    for resp in getattr(result, "raw_responses", []):
+        usage = getattr(resp, "usage", None)
+        if usage is not None:
+            total_input += getattr(usage, "input_tokens", 0)
+            total_output += getattr(usage, "output_tokens", 0)
+    return result.final_output or "", total_input, total_output
 
 
 async def run_async(

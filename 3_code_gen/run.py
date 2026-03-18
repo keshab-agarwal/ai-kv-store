@@ -75,35 +75,38 @@ def _list_files(directory: Path) -> str:
     return "\n".join(str(f) for f in files)
 
 
-def _call_manager(prompt: str, system: str, provider: str) -> str:
+def _call_manager(prompt: str, system: str, provider: str) -> tuple[str, int, int]:
+    """Returns (response, input_tokens, output_tokens)."""
     if provider == "claude":
-        from claude import run
-        return run(prompt, system=system, max_tokens=16384)
+        from claude import run_with_usage
+        return run_with_usage(prompt, system=system, max_tokens=16384)
     elif provider == "openai":
-        from openai_provider import run
-        return run(prompt, instructions=system)
+        from openai_provider import run_with_usage
+        return run_with_usage(prompt, instructions=system)
     else:
         raise ValueError(f"Unknown provider: {provider}")
 
 
-def _call_engineer(prompt: str, system: str, provider: str) -> str:
+def _call_engineer(prompt: str, system: str, provider: str) -> tuple[str, int, int]:
+    """Returns (response, input_tokens, output_tokens)."""
     if provider == "claude":
-        from claude import run_agent
-        return run_agent(prompt, system_prompt=system, cwd=REPO_ROOT)
+        from claude import run_agent_with_usage
+        return run_agent_with_usage(prompt, system_prompt=system, cwd=REPO_ROOT)
     elif provider == "openai":
-        from openai_provider import run, get_shell_tool
-        return run(prompt, instructions=system, tools=[get_shell_tool()])
+        from openai_provider import run_with_usage, get_shell_tool
+        return run_with_usage(prompt, instructions=system, tools=[get_shell_tool()])
     else:
         raise ValueError(f"Unknown provider: {provider}")
 
 
-def _call_verifier(prompt: str, system: str, provider: str) -> str:
+def _call_verifier(prompt: str, system: str, provider: str) -> tuple[str, int, int]:
+    """Returns (response, input_tokens, output_tokens)."""
     if provider == "claude":
-        from claude import run_agent
-        return run_agent(prompt, system_prompt=system, cwd=REPO_ROOT)
+        from claude import run_agent_with_usage
+        return run_agent_with_usage(prompt, system_prompt=system, cwd=REPO_ROOT)
     elif provider == "openai":
-        from openai_provider import run, get_shell_tool
-        return run(prompt, instructions=system, tools=[get_shell_tool()])
+        from openai_provider import run_with_usage, get_shell_tool
+        return run_with_usage(prompt, instructions=system, tools=[get_shell_tool()])
     else:
         raise ValueError(f"Unknown provider: {provider}")
 
@@ -268,12 +271,43 @@ def _print_iteration_header(iteration: int, max_iterations: int) -> None:
     print(f"{'─'*60}\n", file=sys.stderr)
 
 
+# Cost per million tokens (input, output) by model prefix
+_COST_PER_MTOK: list[tuple[str, float, float]] = [
+    ("claude-opus",     5.00, 25.00),
+    ("claude-sonnet",   3.00, 15.00),
+    ("claude-haiku",    1.00,  5.00),
+    ("gpt-4o",          4.00, 16.00),
+    ("gpt-4",           3.00, 12.00),
+    ("gpt-5",           2.50, 15.00),
+]
+
+
+# Map provider names to their default model string for cost lookup
+_PROVIDER_MODEL = {
+    "claude": "claude-sonnet",
+    "openai": "gpt-5",
+}
+
+
+def _estimate_cost(provider: str, input_tokens: int, output_tokens: int) -> float:
+    model = _PROVIDER_MODEL.get(provider, provider)
+    for prefix, in_rate, out_rate in _COST_PER_MTOK:
+        if prefix in model:
+            return (input_tokens * in_rate + output_tokens * out_rate) / 1_000_000
+    return 0.0
+
+
+def _format_tokens(input_tokens: int, output_tokens: int) -> str:
+    return f"{input_tokens:,} in / {output_tokens:,} out"
+
+
 def _print_summary(
     iterations_run: int,
     all_pass: bool,
     passed: int,
     total: int,
     logs_path: Path,
+    cost_by_role: dict[str, tuple[int, int, str]] | None = None,
 ) -> None:
     print(f"\n{'='*60}", file=sys.stderr)
     print("  Pipeline Complete", file=sys.stderr)
@@ -284,6 +318,19 @@ def _print_summary(
         print(f"  Eval gate:    {status}", file=sys.stderr)
     else:
         print("  Eval gate:    not yet measurable", file=sys.stderr)
+    if cost_by_role:
+        print(f"  ── Token usage ──────────────────────────────", file=sys.stderr)
+        total_in = total_out = 0
+        total_cost = 0.0
+        for role, (in_tok, out_tok, provider) in cost_by_role.items():
+            cost = _estimate_cost(provider, in_tok, out_tok)
+            total_in += in_tok
+            total_out += out_tok
+            total_cost += cost
+            cost_str = f"  ~${cost:.4f}" if cost > 0 else ""
+            print(f"  {role:<12} {_format_tokens(in_tok, out_tok)}{cost_str}", file=sys.stderr)
+        cost_str = f"  ~${total_cost:.4f}" if total_cost > 0 else ""
+        print(f"  {'Total':<12} {_format_tokens(total_in, total_out)}{cost_str}", file=sys.stderr)
     print(f"  Log:          {logs_path}", file=sys.stderr)
     print(f"  TODO:         output/TODO.md", file=sys.stderr)
     print(f"{'='*60}\n", file=sys.stderr)
@@ -353,6 +400,9 @@ def run_pipeline(
     last_total = 0
     iterations_run = 0
     pending_feedback: str | None = None
+    tokens_manager = [0, 0]
+    tokens_engineer = [0, 0]
+    tokens_verifier = [0, 0]
 
     for iteration in range(1, max_iterations + 1):
         iterations_run = iteration
@@ -366,7 +416,7 @@ def run_pipeline(
         todo = TODO_PATH.read_text().strip() if TODO_PATH.exists() else "(no TODO.md yet)"
 
         print("  [Manager] Planning next task...", file=sys.stderr)
-        if iteration == 1:
+        if iteration == 1 and not (resume and TODO_PATH.exists()):
             combined_prompt = user_prompt
             if pending_feedback:
                 combined_prompt = (combined_prompt or "") + f"\n\nUser feedback: {pending_feedback}"
@@ -380,7 +430,7 @@ def run_pipeline(
 
         spinner = _Spinner("Manager thinking").start()
         try:
-            manager_response = _call_manager(manager_prompt, manager_system, manager_provider)
+            manager_response, m_in, m_out = _call_manager(manager_prompt, manager_system, manager_provider)
         except Exception as e:
             spinner.stop()
             _log(logs, f"\n[Iteration {iteration}] MANAGER ERROR: {e}")
@@ -388,6 +438,10 @@ def run_pipeline(
             continue
         finally:
             spinner.stop()
+        tokens_manager[0] += m_in
+        tokens_manager[1] += m_out
+        if m_in or m_out:
+            print(f"  [Manager] Tokens: {_format_tokens(m_in, m_out)}", file=sys.stderr)
 
         _log(logs, f"\n{'='*60}")
         _log(logs, f"ITERATION {iteration} — MANAGER ({manager_provider})")
@@ -415,21 +469,25 @@ def run_pipeline(
 
         spinner = _Spinner("Engineer working").start()
         try:
-            engineer_result = _call_engineer(engineer_prompt, engineer_system, engineer_provider)
+            engineer_result, e_in, e_out = _call_engineer(engineer_prompt, engineer_system, engineer_provider)
         except Exception as e:
             spinner.stop()
             engineer_result = f"ENGINEER ERROR: {e}"
+            e_in = e_out = 0
             _log(logs, f"\n[Iteration {iteration}] ENGINEER ERROR: {e}")
             print(f"  [Engineer] Error: {e}", file=sys.stderr)
             continue
         finally:
             spinner.stop()
+        tokens_engineer[0] += e_in
+        tokens_engineer[1] += e_out
 
         _log(logs, f"\n{'─'*60}")
         _log(logs, f"ITERATION {iteration} — ENGINEER ({engineer_provider})")
         _log(logs, f"{'─'*60}")
         _log(logs, engineer_result)
-        print(f"  [Engineer] Done ({len(engineer_result)} chars).", file=sys.stderr)
+        tok_str = f"  Tokens: {_format_tokens(e_in, e_out)}" if (e_in or e_out) else ""
+        print(f"  [Engineer] Done ({len(engineer_result)} chars).{tok_str}", file=sys.stderr)
 
         print("  [Verifier] Checking results...", file=sys.stderr)
         todo = TODO_PATH.read_text().strip() if TODO_PATH.exists() else todo
@@ -437,15 +495,20 @@ def run_pipeline(
 
         spinner = _Spinner("Verifier checking").start()
         try:
-            verifier_result = _call_verifier(verifier_prompt, verifier_system, verifier_provider)
+            verifier_result, v_in, v_out = _call_verifier(verifier_prompt, verifier_system, verifier_provider)
         except Exception as e:
             spinner.stop()
             verifier_result = f"VERIFIER ERROR: {e}"
+            v_in = v_out = 0
             _log(logs, f"\n[Iteration {iteration}] VERIFIER ERROR: {e}")
             print(f"  [Verifier] Error: {e}", file=sys.stderr)
             continue
         finally:
             spinner.stop()
+        tokens_verifier[0] += v_in
+        tokens_verifier[1] += v_out
+        if v_in or v_out:
+            print(f"  [Verifier] Tokens: {_format_tokens(v_in, v_out)}", file=sys.stderr)
 
         _log(logs, f"\n{'─'*60}")
         _log(logs, f"ITERATION {iteration} — VERIFIER ({verifier_provider})")
@@ -459,6 +522,28 @@ def run_pipeline(
         print(f"  [Verifier] Verdict: {verdict or '(not parsed)'}", file=sys.stderr)
         if total > 0:
             print(f"  [Verifier] Eval gate: {passed}/{total} criteria passing", file=sys.stderr)
+
+        iter_in = m_in + e_in + v_in
+        iter_out = m_out + e_out + v_out
+        iter_cost = (
+            _estimate_cost(manager_provider, m_in, m_out)
+            + _estimate_cost(engineer_provider, e_in, e_out)
+            + _estimate_cost(verifier_provider, v_in, v_out)
+        )
+        total_in = tokens_manager[0] + tokens_engineer[0] + tokens_verifier[0]
+        total_out = tokens_manager[1] + tokens_engineer[1] + tokens_verifier[1]
+        total_cost = (
+            _estimate_cost(manager_provider, tokens_manager[0], tokens_manager[1])
+            + _estimate_cost(engineer_provider, tokens_engineer[0], tokens_engineer[1])
+            + _estimate_cost(verifier_provider, tokens_verifier[0], tokens_verifier[1])
+        )
+        iter_cost_str = f"  ~${iter_cost:.4f}" if iter_cost > 0 else ""
+        total_cost_str = f"  ~${total_cost:.4f} total" if total_cost > 0 else ""
+        print(
+            f"  [Cost] iter: {_format_tokens(iter_in, iter_out)}{iter_cost_str}"
+            f"  |  session: {_format_tokens(total_in, total_out)}{total_cost_str}",
+            file=sys.stderr,
+        )
 
         if all_pass and total > 0:
             print(
@@ -480,9 +565,17 @@ def run_pipeline(
     _log(logs, f"\n{'='*60}")
     _log(logs, f"Pipeline finished: {time.strftime('%Y-%m-%d %H:%M:%S')}")
     _log(logs, f"Iterations run: {iterations_run}")
+    _log(logs, f"Tokens — Manager:  {_format_tokens(*tokens_manager)}")
+    _log(logs, f"Tokens — Engineer: {_format_tokens(*tokens_engineer)}")
+    _log(logs, f"Tokens — Verifier: {_format_tokens(*tokens_verifier)}")
     LOGS_PATH.write_text("\n".join(logs) + "\n")
 
-    _print_summary(iterations_run, last_all_pass, last_passed, last_total, LOGS_PATH)
+    cost_by_role = {
+        "Manager":  (tokens_manager[0],  tokens_manager[1],  manager_provider),
+        "Engineer": (tokens_engineer[0], tokens_engineer[1], engineer_provider),
+        "Verifier": (tokens_verifier[0], tokens_verifier[1], verifier_provider),
+    }
+    _print_summary(iterations_run, last_all_pass, last_passed, last_total, LOGS_PATH, cost_by_role)
 
     print(f"  Full log saved to: {LOGS_PATH}", file=sys.stderr)
     print("\nDone! Code generation pipeline complete.\n", file=sys.stderr)
